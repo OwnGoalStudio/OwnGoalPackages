@@ -4,7 +4,7 @@ set -euo pipefail
 repository_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repository_root"
 
-required_commands=(apt-ftparchive gzip bzip2 xz zstd)
+required_commands=(apt-ftparchive xz)
 for command_name in "${required_commands[@]}"; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     echo "Missing required command: $command_name" >&2
@@ -50,10 +50,7 @@ awk '
   }
 ' "$index_dir/Packages"
 
-gzip -9n -c "$index_dir/Packages" > "$index_dir/Packages.gz"
-bzip2 -9c "$index_dir/Packages" > "$index_dir/Packages.bz2"
 xz -9e -c "$index_dir/Packages" > "$index_dir/Packages.xz"
-zstd -q -19 -c "$index_dir/Packages" > "$index_dir/Packages.zst"
 
 # Keeping Release outside the scanned directory prevents a self-referential hash.
 apt-ftparchive \
@@ -71,7 +68,7 @@ apt-ftparchive \
 cp -R assets "$site_dir/assets"
 cp -R debs "$site_dir/debs"
 cp CNAME CydiaIcon.png index.html "$site_dir/"
-cp "$index_dir"/Packages "$index_dir"/Packages.* "$site_dir/"
+cp "$index_dir/Packages" "$index_dir/Packages.xz" "$site_dir/"
 cp "$work_dir/Release" "$site_dir/Release"
 
 rm -rf -- "$output_dir"
