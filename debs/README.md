@@ -6,9 +6,13 @@ Place distributable `.deb` files in this directory, then run:
 ./scripts/update-repository.sh
 ```
 
+Packages downloaded from the GitHub releases declared in `manifest.json` are
+indexed alongside these files and are published from the same `debs/` path. Only
+the `.deb` files committed here are tracked; the downloads and all indexes are
+build artifacts.
+
 The generated `_site/Packages` index records paths relative to the published
-repository root. Only the `.deb` inputs are tracked; all indexes are build
-artifacts.
+repository root.
 
 Each package must define the following fields in `DEBIAN/control`:
 

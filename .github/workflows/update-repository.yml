@@ -8,10 +8,15 @@ on:
       - ".github/workflows/update-repository.yml"
       - "assets/**"
       - "debs/**"
+      - "scripts/fetch-packages.sh"
       - "scripts/update-repository.sh"
       - "CNAME"
       - "CydiaIcon.png"
       - "index.html"
+      - "manifest.json"
+  schedule:
+    # Pick up new upstream releases once a day.
+    - cron: "0 4 * * *"
   workflow_dispatch:
 
 permissions:
@@ -32,9 +37,13 @@ jobs:
       - name: Install repository tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes apt-utils xz-utils
+          sudo apt-get install --yes apt-utils xz-utils jq
 
       - name: Build repository
+        env:
+          # PACKAGE_FETCH_TOKEN reaches releases in private source repositories;
+          # the default token only raises the public API rate limit.
+          PACKAGE_FETCH_TOKEN: ${{ secrets.PACKAGE_FETCH_TOKEN || secrets.GITHUB_TOKEN }}
         run: ./scripts/update-repository.sh
 
       - name: Configure GitHub Pages

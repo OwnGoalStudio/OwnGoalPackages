@@ -1,0 +1,8 @@
+{
+  "packages": [
+    {
+      "repository": "https://github.com/OwnGoalStudio/CocoaInspector",
+      "architecture": "iphoneos-arm64e"
+    }
+  ]
+}

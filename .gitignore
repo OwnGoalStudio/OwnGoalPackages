@@ -1,6 +1,8 @@
 .DS_Store
 .repo-build.*
+.repo-fetch.*
 .repo-sign.*
+/downloads/
 /_site/
 /InRelease
 /Packages

@@ -1,0 +1,243 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repository_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repository_root"
+
+manifest_file="${PACKAGE_MANIFEST:-$repository_root/manifest.json}"
+download_dir="${PACKAGE_DOWNLOAD_DIR:-$repository_root/downloads}"
+fetch_attempts="${PACKAGE_FETCH_ATTEMPTS:-5}"
+fetch_delay="${PACKAGE_FETCH_DELAY:-3}"
+
+required_commands=(curl jq)
+for command_name in "${required_commands[@]}"; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    echo "Missing required command: $command_name" >&2
+    exit 69
+  fi
+done
+
+# Debian and macOS ship different front ends for the same digest.
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256_of() { sha256sum "$1" | cut -d ' ' -f 1; }
+elif command -v shasum >/dev/null 2>&1; then
+  sha256_of() { shasum -a 256 "$1" | cut -d ' ' -f 1; }
+else
+  echo "Missing required command: sha256sum or shasum" >&2
+  exit 69
+fi
+
+if [[ ! -f "$manifest_file" ]]; then
+  echo "Missing package manifest: $manifest_file" >&2
+  exit 66
+fi
+
+if ! jq -e '.packages | type == "array"' "$manifest_file" >/dev/null; then
+  echo "$manifest_file must define a \"packages\" array." >&2
+  exit 65
+fi
+
+# A token is optional for public repositories and only raises the API rate limit,
+# but it is required to reach releases in a private repository.
+release_token="${PACKAGE_FETCH_TOKEN:-${GITHUB_TOKEN:-}}"
+
+curl_options=(--fail --silent --show-error --location --connect-timeout 15 --max-time 300)
+if [[ -n "$release_token" ]]; then
+  # curl drops a manually supplied Authorization header when a redirect crosses
+  # origins, so the asset download still succeeds on the unauthenticated CDN hop.
+  curl_options+=(--header "Authorization: Bearer $release_token")
+fi
+
+work_dir="$(mktemp -d "$repository_root/.repo-fetch.XXXXXX")"
+trap 'rm -rf -- "$work_dir"' EXIT
+
+# Every attempt is retried with exponential backoff because release downloads
+# routinely fail on transient API rate limits and CDN hiccups.
+retry() {
+  local description="$1"
+  shift
+
+  local attempt=1
+  local delay="$fetch_delay"
+
+  while true; do
+    if "$@"; then
+      return 0
+    fi
+
+    if ((attempt >= fetch_attempts)); then
+      echo "$description failed after $fetch_attempts attempts." >&2
+      return 1
+    fi
+
+    echo "$description failed (attempt $attempt/$fetch_attempts); retrying in ${delay}s." >&2
+    sleep "$delay"
+    attempt=$((attempt + 1))
+    delay=$((delay * 2))
+  done
+}
+
+list_releases() {
+  curl "${curl_options[@]}" \
+    --header "Accept: application/vnd.github+json" \
+    --header "X-GitHub-Api-Version: 2022-11-28" \
+    "https://api.github.com/repos/$1/releases?per_page=100" \
+    --output "$2"
+}
+
+download_file() {
+  curl "${curl_options[@]}" \
+    --header "Accept: application/octet-stream" \
+    "$1" \
+    --output "$2"
+}
+
+download_asset() {
+  local asset_url="$1"
+  local output_file="$2"
+  local expected_sha="$3"
+
+  if ! download_file "$asset_url" "$output_file"; then
+    return 1
+  fi
+
+  # A truncated download still exits zero often enough that the archive magic is
+  # the only reliable way to reject a partial file before it reaches the index.
+  local magic
+  magic="$(head -c 7 "$output_file" 2>/dev/null || true)"
+  if [[ "$magic" != '!<arch>' ]]; then
+    echo "Downloaded file is not a Debian archive: $output_file" >&2
+    rm -f -- "$output_file"
+    return 1
+  fi
+
+  if [[ -n "$expected_sha" ]]; then
+    local actual_sha
+    actual_sha="$(sha256_of "$output_file")"
+    if [[ "$actual_sha" != "$expected_sha" ]]; then
+      echo "Checksum mismatch: expected $expected_sha, got $actual_sha" >&2
+      rm -f -- "$output_file"
+      return 1
+    fi
+  fi
+}
+
+rm -rf -- "$download_dir"
+mkdir -p "$download_dir"
+
+package_count="$(jq '.packages | length' "$manifest_file")"
+if ((package_count == 0)); then
+  echo "No packages declared in $manifest_file"
+  exit 0
+fi
+
+for ((package_index = 0; package_index < package_count; package_index++)); do
+  repository="$(jq -r --argjson index "$package_index" '.packages[$index].repository // ""' "$manifest_file")"
+  architecture="$(jq -r --argjson index "$package_index" '.packages[$index].architecture // "iphoneos-arm64e"' "$manifest_file")"
+
+  if [[ -z "$repository" ]]; then
+    echo "Package entry $package_index is missing the repository field." >&2
+    exit 65
+  fi
+
+  # Accept the browser URL, the clone URL, or a bare owner/name slug.
+  slug="$repository"
+  slug="${slug#https://github.com/}"
+  slug="${slug#http://github.com/}"
+  slug="${slug#git@github.com:}"
+  slug="${slug%/}"
+  slug="${slug%.git}"
+
+  if [[ ! "$slug" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+    echo "Cannot derive an owner/name slug from repository: $repository" >&2
+    exit 65
+  fi
+
+  releases_file="$work_dir/releases-$package_index.json"
+  if ! retry "Listing releases for $slug" list_releases "$slug" "$releases_file"; then
+    exit 75
+  fi
+
+  # GitHub returns releases newest first, so the first entry that is neither a
+  # draft, a prerelease, nor tagged as a preview build is the latest stable one.
+  selection_file="$work_dir/selection-$package_index.json"
+  jq --arg architecture "$architecture" '
+    [
+      .[]
+      | select((.draft | not) and (.prerelease | not))
+      | select(
+          (.tag_name // "")
+          | test("(^|[^A-Za-z0-9])(alpha|beta|rc|pre|preview|dev|nightly|snapshot)([^A-Za-z0-9]|$)"; "i")
+          | not
+        )
+    ]
+    | first
+    | if . == null then
+        null
+      else
+        (.assets // []) as $assets
+        | {
+            tag: .tag_name,
+            asset: ($assets | map(select(.name | test("\($architecture)\\.deb$"; "i"))) | first),
+            checksums: ($assets | map(select(.name | test("^SHA256SUMS(\\.txt)?$"; "i"))) | first)
+          }
+      end
+  ' "$releases_file" > "$selection_file"
+
+  if [[ "$(jq -r 'if . == null then "missing" else "found" end' "$selection_file")" == "missing" ]]; then
+    echo "$slug has no stable release." >&2
+    exit 65
+  fi
+
+  release_tag="$(jq -r '.tag' "$selection_file")"
+  asset_name="$(jq -r '.asset.name // ""' "$selection_file")"
+  asset_url="$(jq -r '.asset.url // ""' "$selection_file")"
+  checksums_url="$(jq -r '.checksums.url // ""' "$selection_file")"
+
+  if [[ -z "$asset_name" ]]; then
+    echo "Release $release_tag of $slug has no $architecture .deb asset." >&2
+    exit 65
+  fi
+
+  # Releases that publish a checksum manifest let the download be verified
+  # against the digest the build produced, not just against archive corruption.
+  expected_sha=""
+  if [[ -n "$checksums_url" ]]; then
+    checksums_file="$work_dir/checksums-$package_index.txt"
+    if ! retry "Downloading SHA256SUMS from $slug@$release_tag" \
+      download_file "$checksums_url" "$checksums_file"; then
+      exit 75
+    fi
+
+    expected_sha="$(awk -v name="$asset_name" '
+      {
+        sub(/\r$/, "")
+        sub(/^\*/, "", $2)
+        if ($2 == name) {
+          print $1
+          exit
+        }
+      }
+    ' "$checksums_file")"
+
+    if [[ -z "$expected_sha" ]]; then
+      echo "SHA256SUMS of $slug@$release_tag does not list $asset_name; skipping checksum verification." >&2
+    fi
+  fi
+
+  if [[ -e "$download_dir/$asset_name" ]]; then
+    echo "Duplicate package file name across manifest entries: $asset_name" >&2
+    exit 65
+  fi
+
+  if ! retry "Downloading $asset_name from $slug@$release_tag" \
+    download_asset "$asset_url" "$download_dir/$asset_name" "$expected_sha"; then
+    exit 75
+  fi
+
+  if [[ -n "$expected_sha" ]]; then
+    echo "Fetched $asset_name from $slug@$release_tag (SHA-256 verified)"
+  else
+    echo "Fetched $asset_name from $slug@$release_tag"
+  fi
+done
