@@ -3,6 +3,14 @@
     {
       "repository": "https://github.com/OwnGoalStudio/CocoaInspector",
       "architecture": "iphoneos-arm64e"
+    },
+    {
+      "repository": "https://github.com/OwnGoalStudio/iGhostty",
+      "architecture": "iphoneos-arm64e"
+    },
+    {
+      "repository": "https://github.com/OwnGoalStudio/iGhostty",
+      "architecture": "iphoneos-arm64"
     }
   ]
 }

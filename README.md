@@ -44,7 +44,9 @@ Add an entry to `manifest.json`:
 
 `repository` accepts a browser URL, a clone URL, or a bare `owner/name` slug.
 `architecture` is optional and defaults to `iphoneos-arm64e`; it selects the
-release asset whose file name ends in `<architecture>.deb`.
+release asset whose file name ends in `<architecture>.deb`. A release that ships
+one asset per jailbreak layout is declared once per architecture, so every
+variant reaches the pool under its own file name.
 
 `./scripts/fetch-packages.sh` resolves the newest release that is not a draft,
 not a prerelease, and not tagged as a preview build (`alpha`, `beta`, `rc`,
