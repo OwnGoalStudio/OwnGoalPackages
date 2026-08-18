@@ -15,6 +15,14 @@
     {
       "repository": "https://github.com/OwnGoalStudio/iGhostty",
       "architecture": "iphoneos-arm64"
+    },
+    {
+      "repository": "https://github.com/OwnGoalStudio/kk",
+      "architecture": "iphoneos-arm64e"
+    },
+    {
+      "repository": "https://github.com/OwnGoalStudio/kk",
+      "architecture": "iphoneos-arm64"
     }
   ]
 }
