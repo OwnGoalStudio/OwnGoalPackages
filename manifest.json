@@ -31,6 +31,14 @@
     {
       "repository": "https://github.com/OwnGoalStudio/codex",
       "architecture": "iphoneos-arm64"
+    },
+    {
+      "repository": "https://github.com/OwnGoalStudio/grok",
+      "architecture": "iphoneos-arm64e"
+    },
+    {
+      "repository": "https://github.com/OwnGoalStudio/grok",
+      "architecture": "iphoneos-arm64"
     }
   ]
 }
