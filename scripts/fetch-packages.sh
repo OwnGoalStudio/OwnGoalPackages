@@ -32,8 +32,26 @@ if [[ ! -f "$manifest_file" ]]; then
   exit 66
 fi
 
-if ! jq -e '.packages | type == "array"' "$manifest_file" >/dev/null; then
-  echo "$manifest_file must define a \"packages\" array." >&2
+if ! jq -e '
+  (.packages | type == "array")
+  and all(
+    .packages[];
+    ((.repository | type) == "string")
+    and ((.repository | length) > 0)
+    and ((.architectures | type) == "array")
+    and ((.architectures | length) > 0)
+    and all(
+      .architectures[];
+      (type == "string") and test("^[A-Za-z0-9._-]+$")
+    )
+    and ((.architectures | length) == (.architectures | unique | length))
+  )
+  and (
+    ([.packages[].repository] | length)
+    == ([.packages[].repository] | unique | length)
+  )
+' "$manifest_file" >/dev/null; then
+  echo "$manifest_file must define unique repositories with non-empty, unique architectures arrays." >&2
   exit 65
 fi
 
@@ -133,12 +151,7 @@ fi
 
 for ((package_index = 0; package_index < package_count; package_index++)); do
   repository="$(jq -r --argjson index "$package_index" '.packages[$index].repository // ""' "$manifest_file")"
-  architecture="$(jq -r --argjson index "$package_index" '.packages[$index].architecture // "iphoneos-arm64e"' "$manifest_file")"
-
-  if [[ -z "$repository" ]]; then
-    echo "Package entry $package_index is missing the repository field." >&2
-    exit 65
-  fi
+  architecture_count="$(jq --argjson index "$package_index" '.packages[$index].architectures | length' "$manifest_file")"
 
   # Accept the browser URL, the clone URL, or a bare owner/name slug.
   slug="$repository"
@@ -161,7 +174,7 @@ for ((package_index = 0; package_index < package_count; package_index++)); do
   # GitHub returns releases newest first, so the first entry that is neither a
   # draft, a prerelease, nor tagged as a preview build is the latest stable one.
   selection_file="$work_dir/selection-$package_index.json"
-  jq --arg architecture "$architecture" '
+  jq '
     [
       .[]
       | select((.draft | not) and (.prerelease | not))
@@ -172,14 +185,12 @@ for ((package_index = 0; package_index < package_count; package_index++)); do
         )
     ]
     | first
-    | if . == null then
-        null
-      else
-        (.assets // []) as $assets
-        | {
+      | if . == null then
+          null
+        else
+          {
             tag: .tag_name,
-            asset: ($assets | map(select(.name | test("\($architecture)\\.deb$"; "i"))) | first),
-            checksums: ($assets | map(select(.name | test("^SHA256SUMS(\\.txt)?$"; "i"))) | first)
+            assets: (.assets // [])
           }
       end
   ' "$releases_file" > "$selection_file"
@@ -190,54 +201,81 @@ for ((package_index = 0; package_index < package_count; package_index++)); do
   fi
 
   release_tag="$(jq -r '.tag' "$selection_file")"
-  asset_name="$(jq -r '.asset.name // ""' "$selection_file")"
-  asset_url="$(jq -r '.asset.url // ""' "$selection_file")"
-  checksums_url="$(jq -r '.checksums.url // ""' "$selection_file")"
-
-  if [[ -z "$asset_name" ]]; then
-    echo "Release $release_tag of $slug has no $architecture .deb asset." >&2
-    exit 65
-  fi
+  checksums_url="$(jq -r '
+    .assets
+    | map(select(.name | test("^SHA256SUMS(\\.txt)?$"; "i")))
+    | first
+    | .url // ""
+  ' "$selection_file")"
 
   # Releases that publish a checksum manifest let the download be verified
   # against the digest the build produced, not just against archive corruption.
-  expected_sha=""
+  # Download it once per repository and reuse it for every architecture.
+  checksums_file=""
   if [[ -n "$checksums_url" ]]; then
     checksums_file="$work_dir/checksums-$package_index.txt"
     if ! retry "Downloading SHA256SUMS from $slug@$release_tag" \
       download_file "$checksums_url" "$checksums_file"; then
       exit 75
     fi
+  fi
 
-    expected_sha="$(awk -v name="$asset_name" '
-      {
-        sub(/\r$/, "")
-        sub(/^\*/, "", $2)
-        if ($2 == name) {
-          print $1
-          exit
-        }
-      }
-    ' "$checksums_file")"
+  for ((architecture_index = 0; architecture_index < architecture_count; architecture_index++)); do
+    architecture="$(jq -r \
+      --argjson package_index "$package_index" \
+      --argjson architecture_index "$architecture_index" \
+      '.packages[$package_index].architectures[$architecture_index]' \
+      "$manifest_file")"
 
-    if [[ -z "$expected_sha" ]]; then
-      echo "SHA256SUMS of $slug@$release_tag does not list $asset_name; skipping checksum verification." >&2
+    IFS=$'\t' read -r asset_name asset_url < <(
+      jq -r --arg architecture "$architecture" '
+        [
+          .assets[]
+          | select(.name | test("\($architecture)\\.deb$"; "i"))
+        ]
+        | first
+        | [(.name // ""), (.url // "")]
+        | @tsv
+      ' "$selection_file"
+    )
+
+    if [[ -z "$asset_name" ]]; then
+      echo "Release $release_tag of $slug has no $architecture .deb asset." >&2
+      exit 65
     fi
-  fi
 
-  if [[ -e "$download_dir/$asset_name" ]]; then
-    echo "Duplicate package file name across manifest entries: $asset_name" >&2
-    exit 65
-  fi
+    expected_sha=""
+    if [[ -n "$checksums_file" ]]; then
+      expected_sha="$(awk -v name="$asset_name" '
+        {
+          sub(/\r$/, "")
+          sub(/^\*/, "", $2)
+          if ($2 == name) {
+            print $1
+            exit
+          }
+        }
+      ' "$checksums_file")"
 
-  if ! retry "Downloading $asset_name from $slug@$release_tag" \
-    download_asset "$asset_url" "$download_dir/$asset_name" "$expected_sha"; then
-    exit 75
-  fi
+      if [[ -z "$expected_sha" ]]; then
+        echo "SHA256SUMS of $slug@$release_tag does not list $asset_name; skipping checksum verification." >&2
+      fi
+    fi
 
-  if [[ -n "$expected_sha" ]]; then
-    echo "Fetched $asset_name from $slug@$release_tag (SHA-256 verified)"
-  else
-    echo "Fetched $asset_name from $slug@$release_tag"
-  fi
+    if [[ -e "$download_dir/$asset_name" ]]; then
+      echo "Duplicate package file name across manifest entries: $asset_name" >&2
+      exit 65
+    fi
+
+    if ! retry "Downloading $asset_name from $slug@$release_tag" \
+      download_asset "$asset_url" "$download_dir/$asset_name" "$expected_sha"; then
+      exit 75
+    fi
+
+    if [[ -n "$expected_sha" ]]; then
+      echo "Fetched $asset_name from $slug@$release_tag (SHA-256 verified)"
+    else
+      echo "Fetched $asset_name from $slug@$release_tag"
+    fi
+  done
 done

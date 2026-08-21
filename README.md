@@ -36,17 +36,17 @@ Add an entry to `manifest.json`:
   "packages": [
     {
       "repository": "https://github.com/OwnGoalStudio/CocoaInspector",
-      "architecture": "iphoneos-arm64e"
+      "architectures": ["iphoneos-arm64e", "iphoneos-arm64"]
     }
   ]
 }
 ```
 
 `repository` accepts a browser URL, a clone URL, or a bare `owner/name` slug.
-`architecture` is optional and defaults to `iphoneos-arm64e`; it selects the
-release asset whose file name ends in `<architecture>.deb`. A release that ships
-one asset per jailbreak layout is declared once per architecture, so every
-variant reaches the pool under its own file name.
+`architectures` is a required, non-empty array. Each value selects the release
+asset whose file name ends in `<architecture>.deb`. A repository is declared
+once, and every listed jailbreak layout reaches the pool under its own file
+name.
 
 `./scripts/fetch-packages.sh` resolves the newest release that is not a draft,
 not a prerelease, and not tagged as a preview build (`alpha`, `beta`, `rc`,
