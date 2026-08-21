@@ -98,7 +98,7 @@ apt-ftparchive \
 # Assemble the complete Pages artifact only after all metadata has been generated.
 cp -R assets "$site_dir/assets"
 cp -R "$pool_dir/debs" "$site_dir/debs"
-cp CNAME CydiaIcon.png index.html "$site_dir/"
+cp CNAME CydiaIcon.png index.html manifest.json "$site_dir/"
 cp "$index_dir/Packages" "$index_dir/Packages.xz" "$site_dir/"
 cp "$work_dir/Release" "$site_dir/Release"
 
