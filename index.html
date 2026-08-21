@@ -11,6 +11,7 @@
     <title>OwnGoal Packages</title>
     <link rel="icon" href="./assets/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="./assets/styles.css">
+    <script src="./assets/app.js" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
@@ -56,6 +57,22 @@
           </svg>
         </a>
 
+      </section>
+
+      <section class="packages" aria-labelledby="packages-title">
+        <div class="section-heading">
+          <h2 id="packages-title">Packages</h2>
+          <span id="packages-count"></span>
+        </div>
+        <div class="package-grid" id="package-grid">
+          <p class="packages-status">Loading packages…</p>
+        </div>
+        <noscript>
+          <p class="packages-status">
+            JavaScript is off — browse packages on
+            <a href="https://github.com/OwnGoalStudio">GitHub</a>.
+          </p>
+        </noscript>
       </section>
     </main>
 
